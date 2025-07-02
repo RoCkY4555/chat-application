@@ -29,6 +29,7 @@
         }
         .message-input {
             display: flex;
+            margin-bottom: 10px;
         }
         .message-input input {
             flex: 1;
@@ -68,18 +69,15 @@
             border: none;
             color: #EEEEEE;
         }
-
         .social-icons {
             display: flex;
             align-items: center;
             gap: 15px;
             margin-right: 15px;
         }
-
         .social-icons a {
             font-size: 36px;
         }
-
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.1.4/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
@@ -88,22 +86,36 @@
 <div class="header">
     <h4 class="chatroom-name">ROck Chatroom</h4>
     <div class="d-flex align-items-center">
-        <div class="social-icons">
-
-        </div>
+        <div class="social-icons"></div>
         <button class="btn btn-danger" onclick="leaveChat()">Leave Chat</button>
     </div>
 </div>
+
 <div class="chat-container">
     <h4>Welcome, <span id="username" class="text-primary"></span>!</h4>
     <div id="messages"></div>
+
+    <!-- Text Message Input -->
     <div class="message-input">
         <input type="text" id="messageInput" class="form-control" placeholder="Enter message...">
         <button class="btn btn-success" onclick="sendMessage()">Send</button>
     </div>
+
+    <!-- Voice Message Buttons -->
+    <div class="message-input">
+        <button class="btn btn-warning mr-2" id="recordBtn">🎙️ Record</button>
+        <button class="btn btn-danger" id="stopBtn" disabled>🛑 Stop</button>
+    </div>
+
+    <!-- File Upload -->
+    <div class="message-input">
+        <input type="file" id="fileInput" class="form-control">
+        <button class="btn btn-info ml-2" onclick="sendFile()">📎 Send File</button>
+    </div>
 </div>
+
 <footer class="footer">
-    <p>&copy; . All rights reserved. | <a href="#" class="custom-link">Privacy Policy</a> | <a href="#" class="custom-link">Terms of Service</a></p>
+    <p>&copy; All rights reserved. | <a href="#" class="custom-link">Privacy Policy</a> | <a href="#" class="custom-link">Terms of Service</a></p>
 </footer>
 
 <script>
@@ -111,7 +123,6 @@
     var username = new URLSearchParams(window.location.search).get('username');
     document.getElementById('username').textContent = username;
 
-    // Assign a random color to each user
     var userColors = {};
     function getRandomColor() {
         var letters = '0123456789ABCDEF';
@@ -125,30 +136,60 @@
     function connect() {
         var socket = new SockJS('/chat-websocket');
         stompClient = Stomp.over(socket);
-        stompClient.connect({}, function(frame) {
-            stompClient.subscribe('/topic/messages', function(messageOutput) {
+        stompClient.connect({}, function (frame) {
+            stompClient.subscribe('/topic/messages', function (messageOutput) {
                 showMessage(JSON.parse(messageOutput.body));
             });
-            stompClient.send("/app/chat", {}, JSON.stringify({'username': username, 'content': username + ' has joined the chat'}));
+            stompClient.send("/app/chat", {}, JSON.stringify({
+                'username': username,
+                'content': username + ' has joined the chat',
+                'type': 'text'
+            }));
         });
     }
 
     function sendMessage() {
         var messageInput = document.getElementById('messageInput').value;
-        stompClient.send("/app/chat", {}, JSON.stringify({'username': username, 'content': messageInput}));
+        stompClient.send("/app/chat", {}, JSON.stringify({
+            'username': username,
+            'content': messageInput,
+            'type': 'text'
+        }));
         document.getElementById('messageInput').value = '';
     }
 
+    function sendFile() {
+        const fileInput = document.getElementById('fileInput');
+        const file = fileInput.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function () {
+            const base64File = reader.result.split(',')[1]; // Clean prefix
+            stompClient.send("/app/chat", {}, JSON.stringify({
+                username: username,
+                type: "file",
+                fileName: file.name,
+                fileType: file.type,
+                content: base64File
+            }));
+        };
+        reader.readAsDataURL(file);
+    }
+
     function leaveChat() {
-        stompClient.send("/app/leave", {}, JSON.stringify({'username': username, 'content': username + ' has left the chat'}));
+        stompClient.send("/app/leave", {}, JSON.stringify({
+            'username': username,
+            'content': username + ' has left the chat',
+            'type': 'text'
+        }));
         window.location.href = "/";
     }
 
     function showMessage(message) {
-        var messagesDiv = document.getElementById('messages');
-        var messageElement = document.createElement('p');
+        const messagesDiv = document.getElementById('messages');
+        const messageElement = document.createElement('div');
 
-        // Assign a color to the user if not already assigned
         if (!userColors[message.username]) {
             userColors[message.username] = getRandomColor();
         }
@@ -158,11 +199,63 @@
         messageElement.style.borderRadius = '5px';
         messageElement.style.marginBottom = '5px';
         messageElement.style.color = '#fff';
-        messageElement.appendChild(document.createTextNode(message.username + ": " + message.content));
+
+        if (message.type === "audio") {
+            const audio = document.createElement("audio");
+            audio.controls = true;
+            audio.src = "data:audio/webm;base64," + message.content;
+            messageElement.textContent = message.username + ": ";
+            messageElement.appendChild(audio);
+        } else if (message.type === "file") {
+            const link = document.createElement("a");
+            link.href = "data:" + message.fileType + ";base64," + message.content;
+            link.download = message.fileName;
+            link.textContent = `${message.username} sent: ${message.fileName}`;
+            link.style.color = "#FFD369";
+            messageElement.appendChild(link);
+        } else {
+            messageElement.textContent = message.username + ": " + message.content;
+        }
 
         messagesDiv.appendChild(messageElement);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
+
+    // Voice recording
+    let mediaRecorder;
+    let audioChunks = [];
+
+    document.getElementById("recordBtn").onclick = async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(audioChunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+
+            reader.onloadend = () => {
+                const base64Audio = reader.result.split(',')[1];
+                stompClient.send("/app/chat", {}, JSON.stringify({
+                    username: username,
+                    content: base64Audio,
+                    type: "audio"
+                }));
+            };
+
+            reader.readAsDataURL(blob);
+        };
+
+        mediaRecorder.start();
+        document.getElementById("stopBtn").disabled = false;
+    };
+
+    document.getElementById("stopBtn").onclick = () => {
+        mediaRecorder.stop();
+        document.getElementById("stopBtn").disabled = true;
+    };
 
     connect();
 </script>
